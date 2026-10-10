@@ -8,6 +8,7 @@ export const PositiveMoney = Type.String({ pattern: '^(?!0+\\.00$)\\d{1,10}\\.\\
 
 export const Month = Type.String({ pattern: '^\\d{4}-(0[1-9]|1[0-2])$' })
 export const Id = Type.String({ format: 'uuid' })
+export const CalendarDate = Type.String({ format: 'date' })
 
 export const BudgetGroup = Type.Union([
   Type.Literal('Bills'),
@@ -31,7 +32,7 @@ export const BudgetWithCap = Type.Object({
 export const Transaction = Type.Object({
   id: Id,
   budgetId: Id,
-  date: Type.String(),
+  date: CalendarDate,
   merchant: Type.String(),
   amount: Money,
   note: Type.String(),

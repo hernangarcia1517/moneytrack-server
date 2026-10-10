@@ -7,7 +7,7 @@ import { closeDb, db } from './db/client.js'
 import { transactions } from './db/schema.js'
 import { eq } from 'drizzle-orm'
 
-// These run against the dev database as the seeded "hernan" user and clean up the
+// These run against the test database as the seeded "hernan" user and clean up the
 // budgets they create (transactions and caps go with them).
 const app = buildApp()
 const createdBudgets: string[] = []
@@ -42,7 +42,7 @@ describe('money is a string', () => {
     const res = await app.inject({
       method: 'POST',
       url: '/transactions',
-      payload: { budgetId: budget.id, date: '2026-03-05T12:00:00Z', merchant: 'Shop', amount: 132.18 },
+      payload: { budgetId: budget.id, date: '2026-03-05', merchant: 'Shop', amount: 132.18 },
     })
     assert.equal(res.statusCode, 400)
   })
@@ -58,7 +58,7 @@ describe('money is a string', () => {
       const res = await app.inject({
         method: 'POST',
         url: '/transactions',
-        payload: { budgetId: budget.id, date: '2026-03-05T12:00:00Z', merchant: 'Shop', amount },
+        payload: { budgetId: budget.id, date: '2026-03-05', merchant: 'Shop', amount },
       })
       assert.equal(res.statusCode, 400, `amount ${JSON.stringify(amount)} should be rejected`)
     }
@@ -70,7 +70,7 @@ describe('money is a string', () => {
     const created = await app.inject({
       method: 'POST',
       url: '/transactions',
-      payload: { budgetId: budget.id, date: '2026-03-05T12:00:00Z', merchant: 'Shop', amount: '132.18' },
+      payload: { budgetId: budget.id, date: '2026-03-05', merchant: 'Shop', amount: '132.18' },
     })
     assert.equal(created.statusCode, 201)
     assert.equal(created.json().amount, '132.18')
@@ -162,7 +162,7 @@ describe('budgets', () => {
     const tx = await app.inject({
       method: 'POST',
       url: '/transactions',
-      payload: { budgetId: id, date: '2026-03-05T12:00:00Z', merchant: 'Shop', amount: '10.00' },
+      payload: { budgetId: id, date: '2026-03-05', merchant: 'Shop', amount: '10.00' },
     })
     assert.equal(tx.statusCode, 201)
 
@@ -182,8 +182,8 @@ describe('transactions', () => {
         url: '/transactions',
         payload: { budgetId: id, date, merchant: 'Shop', amount: '10.00' },
       })
-    const inMarch = (await post('2026-03-31T23:00:00Z')).json()
-    const inApril = (await post('2026-04-01T00:00:00Z')).json()
+    const inMarch = (await post('2026-03-31')).json()
+    const inApril = (await post('2026-04-01')).json()
 
     const ids = (month: string) =>
       app.inject({ method: 'GET', url: `/transactions?month=${month}` }).then((r) => r.json().map((t: { id: string }) => t.id))
@@ -198,7 +198,7 @@ describe('transactions', () => {
       await app.inject({
         method: 'POST',
         url: '/transactions',
-        payload: { budgetId: id, date: '2026-03-05T12:00:00Z', merchant: 'Shop', amount: '10.00' },
+        payload: { budgetId: id, date: '2026-03-05', merchant: 'Shop', amount: '10.00' },
       })
     ).json()
     const patched = await app.inject({
@@ -213,11 +213,61 @@ describe('transactions', () => {
     assert.equal((await app.inject({ method: 'DELETE', url: `/transactions/${tx.id}` })).statusCode, 404)
   })
 
+  it('rejects a date-time and an impossible day: dates are calendar days', async () => {
+    const { id } = (await createBudget(uniqueName('badday'), '100.00', '2026-03')).json()
+    for (const date of ['2026-03-05T12:00:00Z', '2026-02-30', '2026-3-5', 'yesterday']) {
+      const res = await app.inject({
+        method: 'POST',
+        url: '/transactions',
+        payload: { budgetId: id, date, merchant: 'Shop', amount: '10.00' },
+      })
+      assert.equal(res.statusCode, 400, date)
+    }
+  })
+
+  it('keeps a transaction on the day it was given, in every month boundary case', async () => {
+    const { id } = (await createBudget(uniqueName('edge'), '100.00', '2026-03')).json()
+    const post = async (date: string) =>
+      (await app.inject({ method: 'POST', url: '/transactions', payload: { budgetId: id, date, merchant: 'Shop', amount: '10.00' } })).json()
+    const lastOfYear = await post('2026-12-31')
+    const firstOfYear = await post('2027-01-01')
+    assert.equal(lastOfYear.date, '2026-12-31')
+    assert.equal(firstOfYear.date, '2027-01-01')
+    const ids = (month: string) =>
+      app.inject({ method: 'GET', url: `/transactions?month=${month}` }).then((r) => r.json().map((t: { id: string }) => t.id))
+    assert.ok((await ids('2026-12')).includes(lastOfYear.id))
+    assert.ok(!(await ids('2026-12')).includes(firstOfYear.id))
+    assert.ok((await ids('2027-01')).includes(firstOfYear.id))
+  })
+
+  it('orders the same day by when it was entered, newest first', async () => {
+    const { id } = (await createBudget(uniqueName('order'), '100.00', '2026-03')).json()
+    const post = async (merchant: string) =>
+      (await app.inject({ method: 'POST', url: '/transactions', payload: { budgetId: id, date: '2026-03-10', merchant, amount: '1.00' } })).json()
+    const first = await post('First')
+    const second = await post('Second')
+    const listed = (await app.inject({ method: 'GET', url: '/transactions?month=2026-03' })).json() as Array<{ id: string }>
+    const mine = listed.filter((t) => t.id === first.id || t.id === second.id).map((t) => t.id)
+    assert.deepEqual(mine, [second.id, first.id])
+  })
+
+  it('moves a transaction to another month when its date is patched', async () => {
+    const { id } = (await createBudget(uniqueName('move'), '100.00', '2026-03')).json()
+    const tx = (await app.inject({ method: 'POST', url: '/transactions', payload: { budgetId: id, date: '2026-03-31', merchant: 'Shop', amount: '10.00' } })).json()
+    const patched = await app.inject({ method: 'PATCH', url: `/transactions/${tx.id}`, payload: { date: '2026-04-01' } })
+    assert.equal(patched.statusCode, 200)
+    assert.equal(patched.json().date, '2026-04-01')
+    const ids = (month: string) =>
+      app.inject({ method: 'GET', url: `/transactions?month=${month}` }).then((r) => r.json().map((t: { id: string }) => t.id))
+    assert.ok(!(await ids('2026-03')).includes(tx.id))
+    assert.ok((await ids('2026-04')).includes(tx.id))
+  })
+
   it('404s when the budget does not exist', async () => {
     const res = await app.inject({
       method: 'POST',
       url: '/transactions',
-      payload: { budgetId: randomUUID(), date: '2026-03-05T12:00:00Z', merchant: 'Shop', amount: '10.00' },
+      payload: { budgetId: randomUUID(), date: '2026-03-05', merchant: 'Shop', amount: '10.00' },
     })
     assert.equal(res.statusCode, 404)
   })

@@ -47,7 +47,8 @@ export const transactions = pgTable(
     budgetId: uuid('budget_id')
       .notNull()
       .references(() => budgets.id, { onDelete: 'cascade' }),
-    date: timestamp({ withTimezone: true }).notNull(),
+    // The day the user says this belongs to; independent of created_at, the UTC instant it was recorded.
+    date: date('date', { mode: 'string' }).notNull(),
     merchant: text().notNull(),
     amount: money('amount').notNull(),
     note: text().notNull().default(''),

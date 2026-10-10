@@ -1,10 +1,10 @@
 import type { TypeBoxTypeProvider } from '@fastify/type-provider-typebox'
-import { and, desc, eq, gte, inArray, lt } from 'drizzle-orm'
+import { and, asc, desc, eq, gte, inArray, lt } from 'drizzle-orm'
 import type { FastifyInstance } from 'fastify'
 import { Type } from 'typebox'
 import { db } from '../db/client.js'
 import { budgets, transactions } from '../db/schema.js'
-import { ErrorBody, Id, Month, PositiveMoney, Transaction } from '../schemas.js'
+import { CalendarDate, ErrorBody, Id, Month, PositiveMoney, Transaction } from '../schemas.js'
 
 const columns = {
   id: transactions.id,
@@ -14,11 +14,6 @@ const columns = {
   amount: transactions.amount,
   note: transactions.note,
 }
-
-const toJson = (row: { id: string; budgetId: string; date: Date; merchant: string; amount: string; note: string }) => ({
-  ...row,
-  date: row.date.toISOString(),
-})
 
 export async function transactionRoutes(app: FastifyInstance) {
   const r = app.withTypeProvider<TypeBoxTypeProvider>()
@@ -34,8 +29,6 @@ export async function transactionRoutes(app: FastifyInstance) {
     return row !== undefined
   }
 
-  // TODO(open question): months are cut at UTC midnight for now. Which time zone decides
-  // what counts as "September" is not settled in the design doc.
   r.get(
     '/transactions',
     {
@@ -46,8 +39,8 @@ export async function transactionRoutes(app: FastifyInstance) {
     },
     async (req) => {
       const [year, month] = req.query.month.split('-').map(Number) as [number, number]
-      const start = new Date(Date.UTC(year, month - 1, 1))
-      const end = new Date(Date.UTC(year, month, 1))
+      const start = `${req.query.month}-01`
+      const end = month === 12 ? `${year + 1}-01-01` : `${year}-${String(month + 1).padStart(2, '0')}-01`
       const rows = await db
         .select(columns)
         .from(transactions)
@@ -58,8 +51,8 @@ export async function transactionRoutes(app: FastifyInstance) {
             lt(transactions.date, end),
           ),
         )
-        .orderBy(desc(transactions.date))
-      return rows.map(toJson)
+        .orderBy(desc(transactions.date), desc(transactions.createdAt), asc(transactions.id))
+      return rows
     },
   )
 
@@ -70,7 +63,7 @@ export async function transactionRoutes(app: FastifyInstance) {
         body: Type.Object(
           {
             budgetId: Id,
-            date: Type.String({ format: 'date-time' }),
+            date: CalendarDate,
             merchant: Type.String({ minLength: 1 }),
             amount: PositiveMoney,
             note: Type.Optional(Type.String()),
@@ -85,9 +78,9 @@ export async function transactionRoutes(app: FastifyInstance) {
       if (!(await ownsBudget(req.userId, budgetId))) return reply.code(404).send({ error: 'Budget not found' })
       const [created] = await db
         .insert(transactions)
-        .values({ budgetId, date: new Date(date), merchant, amount, note: note ?? '' })
+        .values({ budgetId, date, merchant, amount, note: note ?? '' })
         .returning(columns)
-      return reply.code(201).send(toJson(created!))
+      return reply.code(201).send(created!)
     },
   )
 
@@ -99,7 +92,7 @@ export async function transactionRoutes(app: FastifyInstance) {
         body: Type.Object(
           {
             budgetId: Type.Optional(Id),
-            date: Type.Optional(Type.String({ format: 'date-time' })),
+            date: Type.Optional(CalendarDate),
             merchant: Type.Optional(Type.String({ minLength: 1 })),
             amount: Type.Optional(PositiveMoney),
             note: Type.Optional(Type.String()),
@@ -110,17 +103,16 @@ export async function transactionRoutes(app: FastifyInstance) {
       },
     },
     async (req, reply) => {
-      const { date, ...rest } = req.body
-      if (rest.budgetId && !(await ownsBudget(req.userId, rest.budgetId))) {
+      if (req.body.budgetId && !(await ownsBudget(req.userId, req.body.budgetId))) {
         return reply.code(404).send({ error: 'Budget not found' })
       }
       const [updated] = await db
         .update(transactions)
-        .set({ ...rest, ...(date ? { date: new Date(date) } : {}) })
+        .set(req.body)
         .where(and(eq(transactions.id, req.params.id), inArray(transactions.budgetId, ownedBudgetIds(req.userId))))
         .returning(columns)
       if (!updated) return reply.code(404).send({ error: 'Transaction not found' })
-      return toJson(updated)
+      return updated
     },
   )
 

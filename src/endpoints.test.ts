@@ -25,7 +25,7 @@ async function createTx(budgetId: string, over: Record<string, unknown> = {}) {
   const res = await app.inject({
     method: 'POST',
     url: '/transactions',
-    payload: { budgetId, date: '2031-10-08T14:30:00Z', merchant: "Trader Joe's", amount: '42.17', note: 'weekly shop', ...over },
+    payload: { budgetId, date: '2031-10-08', merchant: "Trader Joe's", amount: '42.17', note: 'weekly shop', ...over },
   })
   assert.equal(res.statusCode, 201)
   return res.json() as { id: string; budgetId: string; date: string; merchant: string; amount: string; note: string }
@@ -91,7 +91,7 @@ describe('the 9 endpoints, happy path', () => {
 
   it('DELETE /budgets/:id -> 204 empty body, and its transactions go too', async () => {
     const budget = await createBudget(uniqueName('del'), '100.00', '2031-07')
-    const tx = await createTx(budget.id, { date: '2031-07-08T14:30:00Z' })
+    const tx = await createTx(budget.id, { date: '2031-07-08' })
     const res = await app.inject({ method: 'DELETE', url: `/budgets/${budget.id}` })
     assert.equal(res.statusCode, 204)
     assert.equal(res.body, '')
@@ -99,13 +99,13 @@ describe('the 9 endpoints, happy path', () => {
     assert.ok(!ids.includes(tx.id))
   })
 
-  it('POST /transactions -> 201 full transaction with a normalized date', async () => {
+  it('POST /transactions -> 201 full transaction with the calendar date', async () => {
     const budget = await createBudget(uniqueName('txpost'))
     const tx = await createTx(budget.id)
     assert.deepEqual(tx, {
       id: tx.id,
       budgetId: budget.id,
-      date: '2031-10-08T14:30:00.000Z',
+      date: '2031-10-08',
       merchant: "Trader Joe's",
       amount: '42.17',
       note: 'weekly shop',
@@ -114,9 +114,9 @@ describe('the 9 endpoints, happy path', () => {
 
   it('GET /transactions?month= -> 200 list, newest first', async () => {
     const budget = await createBudget(uniqueName('txget'))
-    const oldest = await createTx(budget.id, { date: '2031-05-01T08:00:00Z' })
-    const newest = await createTx(budget.id, { date: '2031-05-20T08:00:00Z' })
-    const middle = await createTx(budget.id, { date: '2031-05-10T08:00:00Z' })
+    const oldest = await createTx(budget.id, { date: '2031-05-01' })
+    const newest = await createTx(budget.id, { date: '2031-05-20' })
+    const middle = await createTx(budget.id, { date: '2031-05-10' })
     const res = await app.inject({ method: 'GET', url: '/transactions?month=2031-05' })
     assert.equal(res.statusCode, 200)
     const mine = (res.json() as Array<{ id: string }>).filter((t) => [oldest.id, middle.id, newest.id].includes(t.id))
