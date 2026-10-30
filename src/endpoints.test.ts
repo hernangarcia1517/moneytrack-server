@@ -3,6 +3,7 @@ import assert from 'node:assert/strict'
 import { randomUUID } from 'node:crypto'
 import { after, before, describe, it } from 'node:test'
 import { buildApp } from './app.js'
+import { signedInClient } from './testClient.js'
 import { closeDb } from './db/client.js'
 
 // One happy-path test per endpoint (the 9 in moneytrack-server-endpoints.md), asserting
@@ -10,19 +11,20 @@ import { closeDb } from './db/client.js'
 // Runs against the dev database as "hernan" and deletes the budgets it creates.
 // Dates use 2031 and names start with "Contract" so they never collide with app.test.ts.
 const app = buildApp()
+const api = signedInClient(app)
 const createdBudgets: string[] = []
 
 const uniqueName = (label: string) => `Contract ${label} ${randomUUID().slice(0, 8)}`
 
 async function createBudget(name: string, cap = '350.00', month = '2031-10') {
-  const res = await app.inject({ method: 'POST', url: '/budgets', payload: { name, budgetGroup: 'Needs', cap, month } })
+  const res = await api.inject({ method: 'POST', url: '/budgets', payload: { name, budgetGroup: 'Needs', cap, month } })
   assert.equal(res.statusCode, 201)
   createdBudgets.push(res.json().id)
   return res.json() as { id: string; name: string; budgetGroup: string; cap: string }
 }
 
 async function createTx(budgetId: string, over: Record<string, unknown> = {}) {
-  const res = await app.inject({
+  const res = await api.inject({
     method: 'POST',
     url: '/transactions',
     payload: { budgetId, date: '2031-10-08', merchant: "Trader Joe's", amount: '42.17', note: 'weekly shop', ...over },
@@ -33,10 +35,12 @@ async function createTx(budgetId: string, over: Record<string, unknown> = {}) {
 
 before(async () => {
   await app.ready()
+  await api.start()
 })
 
 after(async () => {
-  for (const id of createdBudgets) await app.inject({ method: 'DELETE', url: `/budgets/${id}` })
+  for (const id of createdBudgets) await api.inject({ method: 'DELETE', url: `/budgets/${id}` })
+  await api.stop()
   await app.close()
   await closeDb()
 })
@@ -44,7 +48,7 @@ after(async () => {
 describe('the 9 endpoints, happy path', () => {
   it('POST /budgets -> 201 {id, name, budgetGroup, cap}', async () => {
     const name = uniqueName('post')
-    const res = await app.inject({
+    const res = await api.inject({
       method: 'POST',
       url: '/budgets',
       payload: { name, budgetGroup: 'Needs', cap: '350.00', month: '2031-10' },
@@ -58,7 +62,7 @@ describe('the 9 endpoints, happy path', () => {
     const tag = randomUUID().slice(0, 8)
     const b = await createBudget(`b-${tag}`, '2.00')
     const a = await createBudget(`A-${tag}`, '1.00')
-    const res = await app.inject({ method: 'GET', url: '/budgets?month=2031-10' })
+    const res = await api.inject({ method: 'GET', url: '/budgets?month=2031-10' })
     assert.equal(res.statusCode, 200)
     const mine = (res.json() as Array<{ id: string }>).filter((x) => [a.id, b.id].includes(x.id))
     assert.deepEqual(mine, [a, b])
@@ -66,19 +70,19 @@ describe('the 9 endpoints, happy path', () => {
 
   it('PATCH /budgets/:id -> 200 {id, name, budgetGroup} (no cap)', async () => {
     const budget = await createBudget(uniqueName('patch'))
-    const res = await app.inject({ method: 'PATCH', url: `/budgets/${budget.id}`, payload: { budgetGroup: 'Wants' } })
+    const res = await api.inject({ method: 'PATCH', url: `/budgets/${budget.id}`, payload: { budgetGroup: 'Wants' } })
     assert.equal(res.statusCode, 200)
     assert.deepEqual(res.json(), { id: budget.id, name: budget.name, budgetGroup: 'Wants' })
   })
 
   it('PUT /budgets/:id/cap/:month -> 200 {budgetId, month, amount}, applies from that month on', async () => {
     const budget = await createBudget(uniqueName('put'))
-    const res = await app.inject({ method: 'PUT', url: `/budgets/${budget.id}/cap/2031-12`, payload: { amount: '450.00' } })
+    const res = await api.inject({ method: 'PUT', url: `/budgets/${budget.id}/cap/2031-12`, payload: { amount: '450.00' } })
     assert.equal(res.statusCode, 200)
     assert.deepEqual(res.json(), { budgetId: budget.id, month: '2031-12', amount: '450.00' })
 
     const capIn = async (month: string) =>
-      (await app.inject({ method: 'GET', url: `/budgets?month=${month}` }))
+      (await api.inject({ method: 'GET', url: `/budgets?month=${month}` }))
         .json()
         .find((x: { id: string }) => x.id === budget.id).cap
     assert.deepEqual(await Promise.all(['2031-09', '2031-11', '2031-12', '2032-02'].map(capIn)), [
@@ -92,10 +96,10 @@ describe('the 9 endpoints, happy path', () => {
   it('DELETE /budgets/:id -> 204 empty body, and its transactions go too', async () => {
     const budget = await createBudget(uniqueName('del'), '100.00', '2031-07')
     const tx = await createTx(budget.id, { date: '2031-07-08' })
-    const res = await app.inject({ method: 'DELETE', url: `/budgets/${budget.id}` })
+    const res = await api.inject({ method: 'DELETE', url: `/budgets/${budget.id}` })
     assert.equal(res.statusCode, 204)
     assert.equal(res.body, '')
-    const ids = (await app.inject({ method: 'GET', url: '/transactions?month=2031-07' })).json().map((t: { id: string }) => t.id)
+    const ids = (await api.inject({ method: 'GET', url: '/transactions?month=2031-07' })).json().map((t: { id: string }) => t.id)
     assert.ok(!ids.includes(tx.id))
   })
 
@@ -117,7 +121,7 @@ describe('the 9 endpoints, happy path', () => {
     const oldest = await createTx(budget.id, { date: '2031-05-01' })
     const newest = await createTx(budget.id, { date: '2031-05-20' })
     const middle = await createTx(budget.id, { date: '2031-05-10' })
-    const res = await app.inject({ method: 'GET', url: '/transactions?month=2031-05' })
+    const res = await api.inject({ method: 'GET', url: '/transactions?month=2031-05' })
     assert.equal(res.statusCode, 200)
     const mine = (res.json() as Array<{ id: string }>).filter((t) => [oldest.id, middle.id, newest.id].includes(t.id))
     assert.deepEqual(mine, [newest, middle, oldest])
@@ -126,7 +130,7 @@ describe('the 9 endpoints, happy path', () => {
   it('PATCH /transactions/:id -> 200 full updated transaction', async () => {
     const budget = await createBudget(uniqueName('txpatch'))
     const tx = await createTx(budget.id)
-    const res = await app.inject({ method: 'PATCH', url: `/transactions/${tx.id}`, payload: { amount: '50.00', note: '' } })
+    const res = await api.inject({ method: 'PATCH', url: `/transactions/${tx.id}`, payload: { amount: '50.00', note: '' } })
     assert.equal(res.statusCode, 200)
     assert.deepEqual(res.json(), { ...tx, amount: '50.00', note: '' })
   })
@@ -134,7 +138,7 @@ describe('the 9 endpoints, happy path', () => {
   it('DELETE /transactions/:id -> 204 empty body', async () => {
     const budget = await createBudget(uniqueName('txdel'))
     const tx = await createTx(budget.id)
-    const res = await app.inject({ method: 'DELETE', url: `/transactions/${tx.id}` })
+    const res = await api.inject({ method: 'DELETE', url: `/transactions/${tx.id}` })
     assert.equal(res.statusCode, 204)
     assert.equal(res.body, '')
   })

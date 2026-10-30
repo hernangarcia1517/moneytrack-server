@@ -3,7 +3,7 @@ import { and, eq, isNull } from 'drizzle-orm'
 import { db } from '../db/client.js'
 import { sessions } from '../db/schema.js'
 
-const hashToken = (token: string) => createHash('sha256').update(token).digest('hex')
+export const hashToken = (token: string) => createHash('sha256').update(token).digest('hex')
 
 export async function createSession(userId: string): Promise<string> {
   const token = randomBytes(32).toString('base64url')
