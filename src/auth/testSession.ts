@@ -1,13 +1,13 @@
 import { eq } from 'drizzle-orm'
 import { db } from '../db/client.js'
 import { users } from '../db/schema.js'
+import { isTestDbName } from '../testDbName.js'
 import { createSession } from './sessions.js'
 
 export function testAuthEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
   if (env.ENABLE_TEST_AUTH !== 'true') return false
-  const dbName = new URL(env.DATABASE_URL ?? 'postgres://invalid/none').pathname.slice(1)
-  if (dbName !== 'moneytrack_test') {
-    throw new Error(`ENABLE_TEST_AUTH is on but the database is "${dbName}", not "moneytrack_test". Refusing to start.`)
+  if (!isTestDbName(env.DATABASE_URL)) {
+    throw new Error('ENABLE_TEST_AUTH is on but the database is not "moneytrack_test". Refusing to start.')
   }
   return true
 }

@@ -32,6 +32,25 @@ describe('test-only sign-in switch', () => {
     assert.throws(() => testAuthEnabled({ ENABLE_TEST_AUTH: 'true', DATABASE_URL: otherDb }), /Refusing to start/)
     assert.throws(() => testAuthEnabled({ ENABLE_TEST_AUTH: 'true' }), /Refusing to start/)
   })
+
+  it('reads an encoded database name the way the driver does', () => {
+    const url = 'postgres://u:p@127.0.0.1:5432/moneytrack%5Ftest'
+    assert.equal(testAuthEnabled({ ENABLE_TEST_AUTH: 'true', DATABASE_URL: url }), true)
+  })
+
+  const unreadable = {
+    'a bad port': 'postgres://u:secretpw@localhost:notaport/moneytrack_test',
+    'a # in the password': 'postgres://u:secret#pw@localhost/moneytrack_test',
+    'a missing //': 'postgres:u:secretpw@localhost/moneytrack_test',
+  }
+  for (const [label, url] of Object.entries(unreadable)) {
+    it(`refuses ${label} without printing the password`, () => {
+      assert.throws(
+        () => testAuthEnabled({ ENABLE_TEST_AUTH: 'true', DATABASE_URL: url }),
+        (error: Error) => /Refusing to start/.test(error.message) && !`${error.stack}${JSON.stringify(error)}`.includes('secret'),
+      )
+    })
+  }
 })
 
 function withEnv<T>(vars: Record<string, string | undefined>, run: () => T): T {
