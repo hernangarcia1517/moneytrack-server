@@ -3,6 +3,7 @@ import assert from 'node:assert/strict'
 import { randomUUID } from 'node:crypto'
 import { after, before, describe, it } from 'node:test'
 import { buildApp } from './app.js'
+import { signedInClient } from './testClient.js'
 import { closeDb, db } from './db/client.js'
 import { budgetCaps, transactions } from './db/schema.js'
 import { eq } from 'drizzle-orm'
@@ -10,28 +11,31 @@ import { eq } from 'drizzle-orm'
 // These run against the test database as the seeded "hernan" user and clean up the
 // budgets they create (transactions and caps go with them).
 const app = buildApp()
+const api = signedInClient(app)
 const createdBudgets: string[] = []
 
 const uniqueName = (label: string) => `Test ${label} ${randomUUID().slice(0, 8)}`
 
 async function createBudget(name: string, cap: string, month: string, budgetGroup = 'Needs') {
-  const res = await app.inject({ method: 'POST', url: '/budgets', payload: { name, budgetGroup, cap, month } })
+  const res = await api.inject({ method: 'POST', url: '/budgets', payload: { name, budgetGroup, cap, month } })
   if (res.statusCode === 201) createdBudgets.push(res.json().id)
   return res
 }
 
 async function capIn(budgetId: string, month: string) {
-  const res = await app.inject({ method: 'GET', url: `/budgets?month=${month}` })
+  const res = await api.inject({ method: 'GET', url: `/budgets?month=${month}` })
   assert.equal(res.statusCode, 200)
   return res.json().find((b: { id: string }) => b.id === budgetId)?.cap as string
 }
 
 before(async () => {
   await app.ready()
+  await api.start()
 })
 
 after(async () => {
-  for (const id of createdBudgets) await app.inject({ method: 'DELETE', url: `/budgets/${id}` })
+  for (const id of createdBudgets) await api.inject({ method: 'DELETE', url: `/budgets/${id}` })
+  await api.stop()
   await app.close()
   await closeDb()
 })
@@ -39,7 +43,7 @@ after(async () => {
 describe('money is a string', () => {
   it('rejects a JSON number for a money field instead of coercing it', async () => {
     const budget = (await createBudget(uniqueName('num'), '100.00', '2026-03')).json()
-    const asAmount = await app.inject({
+    const asAmount = await api.inject({
       method: 'POST',
       url: '/transactions',
       payload: { budgetId: budget.id, date: '2026-03-05', merchant: 'Shop', amount: 132.18 },
@@ -52,7 +56,7 @@ describe('money is a string', () => {
   it('rejects amounts that are not exactly two decimals, or are zero for a transaction', async () => {
     const budget = (await createBudget(uniqueName('fmt'), '100.00', '2026-03')).json()
     for (const amount of ['5', '5.5', '5.555', '-5.00', '0.00', '1e3', '']) {
-      const res = await app.inject({
+      const res = await api.inject({
         method: 'POST',
         url: '/transactions',
         payload: { budgetId: budget.id, date: '2026-03-05', merchant: 'Shop', amount },
@@ -67,7 +71,7 @@ describe('caps carry forward from the month they were set', () => {
     // Groceries created in March at $400, edited to $500 in September, then $450 in December.
     const { id } = (await createBudget(uniqueName('caps'), '400.00', '2026-03')).json()
     for (const [month, amount] of [['2026-09', '500.00'], ['2026-12', '450.00']] as const) {
-      const res = await app.inject({ method: 'PUT', url: `/budgets/${id}/cap/${month}`, payload: { amount } })
+      const res = await api.inject({ method: 'PUT', url: `/budgets/${id}/cap/${month}`, payload: { amount } })
       assert.equal(res.statusCode, 200)
       assert.deepEqual(res.json(), { budgetId: id, month, amount })
     }
@@ -85,7 +89,7 @@ describe('caps carry forward from the month they were set', () => {
     for (const [month, cap] of Object.entries(expected)) assert.equal(await capIn(id, month), cap, month)
 
     // Editing June only changes the stretch until the next row (Jun-Aug).
-    await app.inject({ method: 'PUT', url: `/budgets/${id}/cap/2026-06`, payload: { amount: '420.00' } })
+    await api.inject({ method: 'PUT', url: `/budgets/${id}/cap/2026-06`, payload: { amount: '420.00' } })
     assert.equal(await capIn(id, '2026-05'), '400.00')
     assert.equal(await capIn(id, '2026-06'), '420.00')
     assert.equal(await capIn(id, '2026-08'), '420.00')
@@ -94,8 +98,8 @@ describe('caps carry forward from the month they were set', () => {
 
   it('updates the same month in place instead of adding a second row', async () => {
     const { id } = (await createBudget(uniqueName('upsert'), '200.00', '2026-01')).json()
-    await app.inject({ method: 'PUT', url: `/budgets/${id}/cap/2026-02`, payload: { amount: '300.00' } })
-    await app.inject({ method: 'PUT', url: `/budgets/${id}/cap/2026-02`, payload: { amount: '350.00' } })
+    await api.inject({ method: 'PUT', url: `/budgets/${id}/cap/2026-02`, payload: { amount: '300.00' } })
+    await api.inject({ method: 'PUT', url: `/budgets/${id}/cap/2026-02`, payload: { amount: '350.00' } })
     assert.equal(await capIn(id, '2026-01'), '200.00')
     assert.equal(await capIn(id, '2026-02'), '350.00')
   })
@@ -110,7 +114,7 @@ describe('budgets', () => {
 
   it('rejects an unknown group and unknown fields', async () => {
     assert.equal((await createBudget(uniqueName('grp'), '100.00', '2026-03', 'Luxury')).statusCode, 400)
-    const res = await app.inject({
+    const res = await api.inject({
       method: 'POST',
       url: '/budgets',
       payload: { name: uniqueName('extra'), budgetGroup: 'Needs', cap: '1.00', month: '2026-03', surprise: true },
@@ -121,15 +125,15 @@ describe('budgets', () => {
   it('renames and moves group, and rejects an empty patch', async () => {
     const { id } = (await createBudget(uniqueName('patch'), '100.00', '2026-03')).json()
     const renamed = uniqueName('renamed')
-    const res = await app.inject({ method: 'PATCH', url: `/budgets/${id}`, payload: { name: renamed, budgetGroup: 'Wants' } })
+    const res = await api.inject({ method: 'PATCH', url: `/budgets/${id}`, payload: { name: renamed, budgetGroup: 'Wants' } })
     assert.equal(res.statusCode, 200)
     assert.deepEqual(res.json(), { id, name: renamed, budgetGroup: 'Wants' })
-    assert.equal((await app.inject({ method: 'PATCH', url: `/budgets/${id}`, payload: {} })).statusCode, 400)
+    assert.equal((await api.inject({ method: 'PATCH', url: `/budgets/${id}`, payload: {} })).statusCode, 400)
   })
 
   it('deleting a budget deletes its transactions and caps', async () => {
     const { id } = (await createBudget(uniqueName('cascade'), '100.00', '2026-03')).json()
-    const tx = await app.inject({
+    const tx = await api.inject({
       method: 'POST',
       url: '/transactions',
       payload: { budgetId: id, date: '2026-03-05', merchant: 'Shop', amount: '10.00' },
@@ -137,11 +141,11 @@ describe('budgets', () => {
     assert.equal(tx.statusCode, 201)
     assert.equal((await db.select().from(budgetCaps).where(eq(budgetCaps.budgetId, id))).length, 1)
 
-    assert.equal((await app.inject({ method: 'DELETE', url: `/budgets/${id}` })).statusCode, 204)
+    assert.equal((await api.inject({ method: 'DELETE', url: `/budgets/${id}` })).statusCode, 204)
     const remaining = await db.select().from(transactions).where(eq(transactions.id, tx.json().id))
     assert.equal(remaining.length, 0)
     assert.equal((await db.select().from(budgetCaps).where(eq(budgetCaps.budgetId, id))).length, 0)
-    assert.equal((await app.inject({ method: 'DELETE', url: `/budgets/${id}` })).statusCode, 404)
+    assert.equal((await api.inject({ method: 'DELETE', url: `/budgets/${id}` })).statusCode, 404)
   })
 })
 
@@ -150,7 +154,7 @@ describe('transactions', () => {
   it('rejects a date-time and an impossible day: dates are calendar days', async () => {
     const { id } = (await createBudget(uniqueName('badday'), '100.00', '2026-03')).json()
     for (const date of ['2026-03-05T12:00:00Z', '2026-02-30', '2026-3-5', 'yesterday']) {
-      const res = await app.inject({
+      const res = await api.inject({
         method: 'POST',
         url: '/transactions',
         payload: { budgetId: id, date, merchant: 'Shop', amount: '10.00' },
@@ -162,13 +166,13 @@ describe('transactions', () => {
   it('keeps a transaction on the day it was given, in every month boundary case', async () => {
     const { id } = (await createBudget(uniqueName('edge'), '100.00', '2026-03')).json()
     const post = async (date: string) =>
-      (await app.inject({ method: 'POST', url: '/transactions', payload: { budgetId: id, date, merchant: 'Shop', amount: '10.00' } })).json()
+      (await api.inject({ method: 'POST', url: '/transactions', payload: { budgetId: id, date, merchant: 'Shop', amount: '10.00' } })).json()
     const lastOfYear = await post('2026-12-31')
     const firstOfYear = await post('2027-01-01')
     assert.equal(lastOfYear.date, '2026-12-31')
     assert.equal(firstOfYear.date, '2027-01-01')
     const ids = (month: string) =>
-      app.inject({ method: 'GET', url: `/transactions?month=${month}` }).then((r) => r.json().map((t: { id: string }) => t.id))
+      api.inject({ method: 'GET', url: `/transactions?month=${month}` }).then((r) => r.json().map((t: { id: string }) => t.id))
     assert.ok((await ids('2026-12')).includes(lastOfYear.id))
     assert.ok(!(await ids('2026-12')).includes(firstOfYear.id))
     assert.ok((await ids('2027-01')).includes(firstOfYear.id))
@@ -177,28 +181,28 @@ describe('transactions', () => {
   it('orders the same day by when it was entered, newest first', async () => {
     const { id } = (await createBudget(uniqueName('order'), '100.00', '2026-03')).json()
     const post = async (merchant: string) =>
-      (await app.inject({ method: 'POST', url: '/transactions', payload: { budgetId: id, date: '2026-03-10', merchant, amount: '1.00' } })).json()
+      (await api.inject({ method: 'POST', url: '/transactions', payload: { budgetId: id, date: '2026-03-10', merchant, amount: '1.00' } })).json()
     const first = await post('First')
     const second = await post('Second')
-    const listed = (await app.inject({ method: 'GET', url: '/transactions?month=2026-03' })).json() as Array<{ id: string }>
+    const listed = (await api.inject({ method: 'GET', url: '/transactions?month=2026-03' })).json() as Array<{ id: string }>
     const mine = listed.filter((t) => t.id === first.id || t.id === second.id).map((t) => t.id)
     assert.deepEqual(mine, [second.id, first.id])
   })
 
   it('moves a transaction to another month when its date is patched', async () => {
     const { id } = (await createBudget(uniqueName('move'), '100.00', '2026-03')).json()
-    const tx = (await app.inject({ method: 'POST', url: '/transactions', payload: { budgetId: id, date: '2026-03-31', merchant: 'Shop', amount: '10.00' } })).json()
-    const patched = await app.inject({ method: 'PATCH', url: `/transactions/${tx.id}`, payload: { date: '2026-04-01' } })
+    const tx = (await api.inject({ method: 'POST', url: '/transactions', payload: { budgetId: id, date: '2026-03-31', merchant: 'Shop', amount: '10.00' } })).json()
+    const patched = await api.inject({ method: 'PATCH', url: `/transactions/${tx.id}`, payload: { date: '2026-04-01' } })
     assert.equal(patched.statusCode, 200)
     assert.equal(patched.json().date, '2026-04-01')
     const ids = (month: string) =>
-      app.inject({ method: 'GET', url: `/transactions?month=${month}` }).then((r) => r.json().map((t: { id: string }) => t.id))
+      api.inject({ method: 'GET', url: `/transactions?month=${month}` }).then((r) => r.json().map((t: { id: string }) => t.id))
     assert.ok(!(await ids('2026-03')).includes(tx.id))
     assert.ok((await ids('2026-04')).includes(tx.id))
   })
 
   it('404s when the budget does not exist', async () => {
-    const res = await app.inject({
+    const res = await api.inject({
       method: 'POST',
       url: '/transactions',
       payload: { budgetId: randomUUID(), date: '2026-03-05', merchant: 'Shop', amount: '10.00' },

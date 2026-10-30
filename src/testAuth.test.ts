@@ -4,8 +4,8 @@ import { createHash } from 'node:crypto'
 import { after, describe, it } from 'node:test'
 import { eq } from 'drizzle-orm'
 import { buildApp } from './app.js'
-import { userIdForToken } from './auth/sessions.js'
-import { testAuthEnabled } from './auth/testSession.js'
+import { hashToken, userIdForToken } from './auth/sessions.js'
+import { testAuthEnabled, testUserSession } from './auth/testSession.js'
 import { closeDb, db } from './db/client.js'
 import { sessions, users } from './db/schema.js'
 
@@ -83,7 +83,10 @@ describe('POST /auth/test-session', () => {
 
   it('does not exist when the flag is off', async () => {
     const app = withEnv({ ENABLE_TEST_AUTH: undefined }, () => buildApp())
-    assert.equal((await app.inject({ method: 'POST', url: '/auth/test-session' })).statusCode, 404)
+    const token = await testUserSession()
+    createdHashes.push(hashToken(token))
+    const res = await app.inject({ method: 'POST', url: '/auth/test-session', headers: { authorization: `Bearer ${token}` } })
+    assert.equal(res.statusCode, 404)
     await app.close()
   })
 
