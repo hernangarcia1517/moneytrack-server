@@ -13,7 +13,7 @@ declare module 'fastify' {
 
 export async function authenticate(req: FastifyRequest, reply: FastifyReply) {
   if (req.routeOptions.config?.public) return
-  const token = req.headers.authorization?.match(/^Bearer (.+)$/)?.[1]
+  const token = req.headers.authorization?.match(/^Bearer +(\S+)$/i)?.[1]
   const userId = token ? await userIdForToken(token) : null
   if (!token || !userId) return reply.code(401).send({ error: 'Unauthorized' })
   req.userId = userId

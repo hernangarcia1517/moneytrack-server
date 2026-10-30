@@ -8,7 +8,7 @@ import { closeDb } from './db/client.js'
 
 // One happy-path test per endpoint (the 9 in moneytrack-server-endpoints.md), asserting
 // the exact documented response. Error cases and behavior rules live in app.test.ts.
-// Runs against the dev database as "hernan" and deletes the budgets it creates.
+// Runs against the test database through a signed-in client and deletes the budgets it creates.
 // Dates use 2031 and names start with "Contract" so they never collide with app.test.ts.
 const app = buildApp()
 const api = signedInClient(app)
