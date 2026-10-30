@@ -57,6 +57,7 @@ describe('every route but the sign-in ones needs a session token', () => {
     for (const { method, url } of protectedRoutes) {
       const res = await app.inject({ method: method as 'GET', url: url.replace(':id', someId).replace(':month', '2026-10') })
       assert.equal(res.statusCode, 401, `${method} ${url}`)
+      assert.equal(res.headers['www-authenticate'], 'Bearer', `${method} ${url}`)
       if (method !== 'HEAD') assert.deepEqual(res.json(), { error: 'Unauthorized' }, `${method} ${url}`)
     }
   })
@@ -84,6 +85,15 @@ describe('every route but the sign-in ones needs a session token', () => {
     const swapped = [...token].map((c) => (c === c.toLowerCase() ? c.toUpperCase() : c.toLowerCase())).join('')
     assert.notEqual(swapped, token)
     assert.equal((await send(`Bearer ${swapped}`)).statusCode, 401)
+  })
+
+  it('rejects a valid token in any shape other than "Bearer", spaces, token', async () => {
+    const token = await testUserSession()
+    createdTokens.push(token)
+    for (const authorization of [`Bearer ${token} extra`, `Bearer\t${token}`, `Bearer${token}`, ` Bearer ${token}`, token]) {
+      const res = await app.inject({ method: 'GET', url: '/budgets?month=2026-10', headers: { authorization } })
+      assert.equal(res.statusCode, 401, JSON.stringify(authorization.replace(token, '<token>')))
+    }
   })
 
   it('answers 401 for a path that does not exist and for OPTIONS, so nothing is revealed without a token', async () => {
