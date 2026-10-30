@@ -1,8 +1,9 @@
 import type { TypeBoxTypeProvider } from '@fastify/type-provider-typebox'
 import { eq } from 'drizzle-orm'
 import type { FastifyInstance } from 'fastify'
+import { Type } from 'typebox'
 import { AppleTokenError, type VerifyApple } from '../auth/apple.js'
-import { createSession } from '../auth/sessions.js'
+import { createSession, revokeSession } from '../auth/sessions.js'
 import { testUserSession } from '../auth/testSession.js'
 import { db } from '../db/client.js'
 import { users } from '../db/schema.js'
@@ -13,14 +14,14 @@ export async function authRoutes(app: FastifyInstance, opts: { verifyApple: Veri
 
   if (opts.testAuth) {
     app.log.warn('Test-only sign-in is ON: POST /auth/test-session gives anyone a session. Never enable it outside moneytrack_test.')
-    r.post('/auth/test-session', { schema: { response: { 200: SessionBody } } }, async () => ({
+    r.post('/auth/test-session', { config: { public: true }, schema: { response: { 200: SessionBody } } }, async () => ({
       sessionToken: await testUserSession(),
     }))
   }
 
   r.post(
     '/auth/apple',
-    { schema: { body: AppleSignInBody, response: { 200: SessionBody, 401: ErrorBody } } },
+    { config: { public: true }, schema: { body: AppleSignInBody, response: { 200: SessionBody, 401: ErrorBody } } },
     async (req, reply) => {
       let identity
       try {
@@ -39,4 +40,9 @@ export async function authRoutes(app: FastifyInstance, opts: { verifyApple: Veri
       return { sessionToken: await createSession(user!.id) }
     },
   )
+
+  r.post('/auth/signout', { schema: { response: { 204: Type.Null(), 401: ErrorBody } } }, async (req, reply) => {
+    await revokeSession(req.sessionToken)
+    return reply.code(204).send(null)
+  })
 }

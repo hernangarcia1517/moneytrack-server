@@ -2,8 +2,7 @@ import { and, eq, isNull } from 'drizzle-orm'
 import { closeDb, db } from './client.js'
 import { users } from './schema.js'
 
-// The single test user until login exists. auth_provider_id stays null; the first real
-// sign-in attaches the provider id to this row so the test data carries over.
+// The seeded test user: auth_provider_id stays null, which marks it as not a real Apple user.
 const [existing] = await db
   .select({ id: users.id })
   .from(users)
