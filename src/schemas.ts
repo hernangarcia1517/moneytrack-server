@@ -39,3 +39,13 @@ export const Transaction = Type.Object({
 })
 
 export const ErrorBody = Type.Object({ error: Type.String() })
+
+export const AppleSignInBody = Type.Object(
+  {
+    identityToken: Type.String({ minLength: 1, maxLength: 4096 }),
+    nonce: Type.String({ minLength: 1, maxLength: 256 }),
+    fullName: Type.Optional(Type.String({ maxLength: 200 })),
+  },
+  { additionalProperties: false },
+)
+export const SessionBody = Type.Object({ sessionToken: Type.String() })
