@@ -1,6 +1,7 @@
 import Fastify from 'fastify'
 import { verifyApple, type VerifyApple } from './auth/apple.js'
 import { getCurrentUserId } from './auth/currentUser.js'
+import { testAuthEnabled } from './auth/testSession.js'
 import { authRoutes } from './routes/auth.js'
 import { budgetRoutes } from './routes/budgets.js'
 import { transactionRoutes } from './routes/transactions.js'
@@ -11,7 +12,7 @@ declare module 'fastify' {
   }
 }
 
-export function buildApp(opts: { logger?: boolean; verifyApple?: VerifyApple } = {}) {
+export function buildApp(opts: { logger?: boolean; verifyApple?: VerifyApple; testAuth?: boolean } = {}) {
   const app = Fastify({
     logger: opts.logger ?? false,
     ajv: {
@@ -31,7 +32,7 @@ export function buildApp(opts: { logger?: boolean; verifyApple?: VerifyApple } =
     req.userId = await getCurrentUserId(req)
   })
 
-  app.register(authRoutes, { verifyApple: opts.verifyApple ?? verifyApple })
+  app.register(authRoutes, { verifyApple: opts.verifyApple ?? verifyApple, testAuth: opts.testAuth ?? testAuthEnabled() })
   app.register(budgetRoutes)
   app.register(transactionRoutes)
   return app

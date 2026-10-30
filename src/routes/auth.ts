@@ -3,12 +3,19 @@ import { eq } from 'drizzle-orm'
 import type { FastifyInstance } from 'fastify'
 import { AppleTokenError, type VerifyApple } from '../auth/apple.js'
 import { createSession } from '../auth/sessions.js'
+import { testUserSession } from '../auth/testSession.js'
 import { db } from '../db/client.js'
 import { users } from '../db/schema.js'
 import { AppleSignInBody, ErrorBody, SessionBody } from '../schemas.js'
 
-export async function authRoutes(app: FastifyInstance, opts: { verifyApple: VerifyApple }) {
+export async function authRoutes(app: FastifyInstance, opts: { verifyApple: VerifyApple; testAuth: boolean }) {
   const r = app.withTypeProvider<TypeBoxTypeProvider>()
+
+  if (opts.testAuth) {
+    r.post('/auth/test-session', { schema: { response: { 200: SessionBody } } }, async () => ({
+      sessionToken: await testUserSession(),
+    }))
+  }
 
   r.post(
     '/auth/apple',
