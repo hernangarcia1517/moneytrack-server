@@ -12,7 +12,7 @@ declare module 'fastify' {
   }
 }
 
-export function buildApp(opts: { logger?: boolean; verifyApple?: VerifyApple; testAuth?: boolean } = {}) {
+export function buildApp(opts: { logger?: boolean; verifyApple?: VerifyApple } = {}) {
   const app = Fastify({
     logger: opts.logger ?? false,
     ajv: {
@@ -32,7 +32,7 @@ export function buildApp(opts: { logger?: boolean; verifyApple?: VerifyApple; te
     req.userId = await getCurrentUserId(req)
   })
 
-  app.register(authRoutes, { verifyApple: opts.verifyApple ?? verifyApple, testAuth: opts.testAuth ?? testAuthEnabled() })
+  app.register(authRoutes, { verifyApple: opts.verifyApple ?? verifyApple, testAuth: testAuthEnabled() })
   app.register(budgetRoutes)
   app.register(transactionRoutes)
   return app

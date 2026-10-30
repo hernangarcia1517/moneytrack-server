@@ -12,6 +12,7 @@ export async function authRoutes(app: FastifyInstance, opts: { verifyApple: Veri
   const r = app.withTypeProvider<TypeBoxTypeProvider>()
 
   if (opts.testAuth) {
+    app.log.warn('Test-only sign-in is ON: POST /auth/test-session gives anyone a session. Never enable it outside moneytrack_test.')
     r.post('/auth/test-session', { schema: { response: { 200: SessionBody } } }, async () => ({
       sessionToken: await testUserSession(),
     }))

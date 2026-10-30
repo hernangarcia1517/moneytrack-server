@@ -34,9 +34,25 @@ describe('test-only sign-in switch', () => {
   })
 })
 
+function withEnv<T>(vars: Record<string, string | undefined>, run: () => T): T {
+  const saved = Object.fromEntries(Object.keys(vars).map((key) => [key, process.env[key]]))
+  const apply = (values: Record<string, string | undefined>) => {
+    for (const [key, value] of Object.entries(values)) {
+      if (value === undefined) delete process.env[key]
+      else process.env[key] = value
+    }
+  }
+  apply(vars)
+  try {
+    return run()
+  } finally {
+    apply(saved)
+  }
+}
+
 describe('POST /auth/test-session', () => {
-  it('returns a session for the seeded test user when enabled', async () => {
-    const app = buildApp({ testAuth: true })
+  it('returns a session for the seeded test user when the flag is on', async () => {
+    const app = withEnv({ ENABLE_TEST_AUTH: 'true' }, () => buildApp())
     const res = await app.inject({ method: 'POST', url: '/auth/test-session' })
     assert.equal(res.statusCode, 200)
     const token = res.json().sessionToken as string
@@ -46,9 +62,13 @@ describe('POST /auth/test-session', () => {
     await app.close()
   })
 
-  it('does not exist when disabled', async () => {
-    const app = buildApp({ testAuth: false })
+  it('does not exist when the flag is off', async () => {
+    const app = withEnv({ ENABLE_TEST_AUTH: undefined }, () => buildApp())
     assert.equal((await app.inject({ method: 'POST', url: '/auth/test-session' })).statusCode, 404)
     await app.close()
+  })
+
+  it('stops the app from being built when the flag is on and the database is not the test one', () => {
+    assert.throws(() => withEnv({ ENABLE_TEST_AUTH: 'true', DATABASE_URL: otherDb }, () => buildApp()), /Refusing to start/)
   })
 })
